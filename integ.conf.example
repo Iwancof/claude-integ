@@ -1,0 +1,27 @@
+# claude-integ の既定モデル配置。~/.config/claude-router/integ.conf に置くと
+# claude-integ が起動時に source する。ショートカット名(fable/sol/kimi/glm 等)可。
+# 明示フラグ/引数が常に優先。--plain でこのファイル自体を無視。
+# 空文字("")はその項目の既定を使わない、の意。
+#
+# 配置の考え方の一例は examples/model-placement-2026-07.md を参照。
+
+# メインモデル(未指定時は claude-opus-5)
+#INTEG_DEFAULT_MODEL="fable"
+
+# subagent (Task tool) のモデル
+#INTEG_DEFAULT_SUBAGENT="sol"
+
+# background/fast モデル(未指定なら純正 haiku のまま。
+# Claude 系ツールに依存する background 処理があるため、純正のままを推奨)
+#INTEG_DEFAULT_FAST=""
+
+# teammate alias remap(agent teams 用):
+#   teammate の model パラメータは sonnet|opus|haiku|fable の enum のみ。
+#   alias を他ベンダーへ remap することで混成チームを組む。
+#   例: INTEG_DEFAULT_SONNET_MAP="kimi" → model "sonnet" の teammate が Kimi で動く
+# 注意: remap は alias 全体に効く(/model sonnet もそのモデルになる)。
+#       user settings の env で ANTHROPIC_DEFAULT_*_MODEL を固定している alias は
+#       remap できない(settings が process env に勝つ)。
+#INTEG_DEFAULT_SONNET_MAP=""
+#INTEG_DEFAULT_FABLE_MAP=""
+#INTEG_DEFAULT_OPUS_MAP=""

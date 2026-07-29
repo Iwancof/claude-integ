@@ -1,0 +1,39 @@
+# claude-router example config.
+# Real config: ~/.config/claude-router/config.toml (chmod 600 — holds vendor keys).
+
+listen_host = "127.0.0.1"
+listen_port = 8399
+default_backend = "anthropic"
+
+# No auth_token => passthrough: the client's own auth headers (e.g. Claude
+# Code's subscription OAuth bearer) are forwarded untouched.
+[backends.anthropic]
+url = "https://api.anthropic.com"
+
+# Anthropic-Messages-API-compatible vendor endpoints. auth_token replaces the
+# client's Authorization/x-api-key. strip_beta removes beta flags the vendor
+# must not see (the OAuth flag comes from the subscription login).
+[backends.kimi]
+url = "https://api.kimi.com/coding"
+auth_token = "sk-kimi-REPLACE_ME"
+# The coding-plan endpoint serves kimi-for-coding(-highspeed) = K2.7 and
+# k3 / k3-256k (ids without the kimi- prefix, hence the extra "k3" prefix).
+model_prefixes = ["kimi-", "k3"]
+strip_beta = ["oauth-2025-04-20"]
+picker_models = [
+  { id = "k3", display_name = "Kimi K3 (Moonshot)" },
+  { id = "kimi-for-coding", display_name = "Kimi K2.7 Coding (Moonshot)" },
+]
+
+[backends.glm]
+url = "https://api.z.ai/api/anthropic"
+auth_token = "REPLACE_ME"
+model_prefixes = ["glm-"]
+strip_beta = ["oauth-2025-04-20"]
+
+# Resident CLIProxyAPI (Anthropic-format endpoint, translates to Codex/OpenAI).
+[backends.cliproxy]
+url = "http://127.0.0.1:8317"
+auth_token = "sk-dummy"
+model_prefixes = ["gpt-"]
+strip_beta = ["oauth-2025-04-20"]

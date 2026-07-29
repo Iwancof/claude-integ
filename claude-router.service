@@ -1,0 +1,14 @@
+# Template unit — install.sh generates ~/.config/systemd/user/claude-router.service
+# with the ExecStart path rewritten to where you cloned this repo.
+[Unit]
+Description=claude-router model routing proxy for Claude Code
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 @REPO@/claude_router.py --config %h/.config/claude-router/config.toml
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

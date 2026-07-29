@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# claude-integ — unified Claude Code launcher via claude-router (127.0.0.1:8399).
+#
+# One session, every vendor: the main/fast/subagent models can each be any of
+# Anthropic (subscription OAuth, untouched), Kimi, GLM, or GPT (CLIProxyAPI).
+# Switch mid-session with /model <full-model-name> — the router routes by name.
+#
+# Usage:
+#   claude-integ [MODEL] [options] [claude args...]
+#
+# MODEL shortcuts (first positional arg; full names also accepted):
+#   opus fable sonnet haiku          -> claude-{opus,fable,sonnet}-5 / claude-haiku-4-5
+#   kimi                             -> kimi-for-coding
+#   glm                              -> glm-5.2
+#   sol terra luna 5.5               -> gpt-5.6-{sol,terra,luna} / gpt-5.5
+#
+# Options:
+#   --fast MODEL       fast/background model (ANTHROPIC_DEFAULT_HAIKU_MODEL,
+#                      ANTHROPIC_SMALL_FAST_MODEL); shortcuts allowed
+#   --subagent MODEL   subagent model (CLAUDE_CODE_SUBAGENT_MODEL); shortcuts allowed
+#   --opus MODEL       remap the "opus" alias (ANTHROPIC_DEFAULT_OPUS_MODEL)
+#   --sonnet MODEL     remap the "sonnet" alias (ANTHROPIC_DEFAULT_SONNET_MODEL)
+#   --fable MODEL      remap the "fable" alias (ANTHROPIC_DEFAULT_FABLE_MODEL)
+#                      Teammate/subagent model params only accept the enum
+#                      sonnet|opus|haiku|fable — remapping an alias is how a
+#                      teammate runs on another vendor (e.g. --sonnet glm-5.2,
+#                      then spawn the teammate with model "sonnet").
+#   --effort LEVEL     reasoning effort (default: max)
+#   --safe             do NOT pass --dangerously-skip-permissions
+#   --plain            ignore ~/.config/claude-router/integ.conf defaults
+#   Everything else is passed to claude verbatim (incl. --settings for
+#   separate teammate/profile settings files).
+#
+# Defaults: ~/.config/claude-router/integ.conf preloads the recommended
+# placement (main=fable, subagent=sol, teammate sonnet->kimi, fable->sol);
+# bare `claude-integ` uses it, explicit args/flags always override, and an
+# empty flag value (e.g. --subagent "") disables that default.
+set -euo pipefail
+
+ROUTER_URL="${CLAUDE_INTEG_ROUTER_URL:-http://127.0.0.1:8399}"
+
+# The real claude binary (override with CLAUDE_INTEG_CLAUDE_BIN if needed).
+CLAUDE_BIN="${CLAUDE_INTEG_CLAUDE_BIN:-$(command -v claude || true)}"
+if [[ -z "$CLAUDE_BIN" ]]; then
+  echo "claude-integ: 'claude' not found in PATH (set CLAUDE_INTEG_CLAUDE_BIN)" >&2
+  exit 1
+fi
+
+resolve_model() {
+  case "$1" in
+    opus) echo "claude-opus-5" ;;
+    fable) echo "claude-fable-5" ;;
+    sonnet) echo "claude-sonnet-5" ;;
+    haiku) echo "claude-haiku-4-5" ;;
+    kimi) echo "kimi-for-coding" ;;
+    glm) echo "glm-5.2" ;;
+    air) echo "glm-4.5-air" ;;
+    sol | 5.6-sol) echo "gpt-5.6-sol" ;;
+    terra | 5.6-terra) echo "gpt-5.6-terra" ;;
+    luna | 5.6-luna) echo "gpt-5.6-luna" ;;
+    5.5) echo "gpt-5.5" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+model="claude-opus-5"
+fast_model=""
+subagent_model=""
+opus_map=""
+sonnet_map=""
+fable_map=""
+effort="max"
+safe=0
+declare -a passthrough=()
+
+# Default placement (docs/model-placement-2026-07.md) from the config file;
+# explicit args always win, --plain skips it entirely.
+INTEG_CONF="${CLAUDE_INTEG_CONF:-$HOME/.config/claude-router/integ.conf}"
+plain=0
+declare -a _args=()
+for a in "$@"; do
+  if [[ "$a" == "--plain" ]]; then plain=1; else _args+=("$a"); fi
+done
+set -- ${_args[@]+"${_args[@]}"}
+unset _args
+if (( ! plain )) && [[ -r "$INTEG_CONF" ]]; then
+  # shellcheck source=/dev/null
+  source "$INTEG_CONF"
+  [[ -n "${INTEG_DEFAULT_MODEL:-}" ]] && model="$(resolve_model "$INTEG_DEFAULT_MODEL")"
+  [[ -n "${INTEG_DEFAULT_FAST:-}" ]] && fast_model="$(resolve_model "$INTEG_DEFAULT_FAST")"
+  [[ -n "${INTEG_DEFAULT_SUBAGENT:-}" ]] && subagent_model="$(resolve_model "$INTEG_DEFAULT_SUBAGENT")"
+  [[ -n "${INTEG_DEFAULT_OPUS_MAP:-}" ]] && opus_map="$(resolve_model "$INTEG_DEFAULT_OPUS_MAP")"
+  [[ -n "${INTEG_DEFAULT_SONNET_MAP:-}" ]] && sonnet_map="$(resolve_model "$INTEG_DEFAULT_SONNET_MAP")"
+  [[ -n "${INTEG_DEFAULT_FABLE_MAP:-}" ]] && fable_map="$(resolve_model "$INTEG_DEFAULT_FABLE_MAP")"
+fi
+
+# First positional arg (not starting with -) is the model shortcut.
+if [[ $# -gt 0 && "${1:0:1}" != "-" ]]; then
+  model="$(resolve_model "$1")"
+  shift
+fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --fast) fast_model="$(resolve_model "$2")"; shift 2 ;;
+    --fast=*) fast_model="$(resolve_model "${1#--fast=}")"; shift ;;
+    --subagent) subagent_model="$(resolve_model "$2")"; shift 2 ;;
+    --subagent=*) subagent_model="$(resolve_model "${1#--subagent=}")"; shift ;;
+    --opus) opus_map="$(resolve_model "$2")"; shift 2 ;;
+    --opus=*) opus_map="$(resolve_model "${1#--opus=}")"; shift ;;
+    --sonnet) sonnet_map="$(resolve_model "$2")"; shift 2 ;;
+    --sonnet=*) sonnet_map="$(resolve_model "${1#--sonnet=}")"; shift ;;
+    --fable) fable_map="$(resolve_model "$2")"; shift 2 ;;
+    --fable=*) fable_map="$(resolve_model "${1#--fable=}")"; shift ;;
+    --effort) effort="$2"; shift 2 ;;
+    --effort=*) effort="${1#--effort=}"; shift ;;
+    --safe) safe=1; shift ;;
+    *) passthrough+=("$1"); shift ;;
+  esac
+done
+
+# GRAPHITI_KEY fallback for MCP/hooks (same as the old claude-kimi/claude-glm).
+if [[ -z "${GRAPHITI_KEY:-}" ]] && command -v systemctl >/dev/null 2>&1; then
+  graphiti_key="$(systemctl --user show-environment 2>/dev/null | sed -n 's/^GRAPHITI_KEY=//p' | head -n 1)"
+  [[ -n "$graphiti_key" ]] && export GRAPHITI_KEY="$graphiti_key"
+  unset graphiti_key
+fi
+
+# Make sure the router is up (resident via systemd; start if stopped).
+if ! curl -sf -m 2 "$ROUTER_URL/claude-router/health" >/dev/null 2>&1; then
+  systemctl --user start claude-router.service 2>/dev/null || true
+  sleep 0.5
+  if ! curl -sf -m 2 "$ROUTER_URL/claude-router/health" >/dev/null 2>&1; then
+    echo "claude-integ: claude-router is not reachable at $ROUTER_URL" >&2
+    exit 1
+  fi
+fi
+
+export ANTHROPIC_BASE_URL="$ROUTER_URL"
+# Subscription OAuth must be the auth source: the router passes it through to
+# api.anthropic.com and swaps auth only for third-party models.
+unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY
+
+# /model picker: Claude Code lists extra models from its gateway-models cache
+# when CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY is set, auth is first-party
+# OAuth, and BASE_URL is non-first-party (exactly this setup). The CLI's own
+# fetch is skipped under OAuth, so build the cache from the router's catalog.
+export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY="1"
+cache_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/cache"
+mkdir -p "$cache_dir"
+if catalog="$(curl -sf -m 2 "$ROUTER_URL/claude-router/models")"; then
+  printf '%s' "$catalog" | jq --arg base "$ROUTER_URL" \
+    '{baseUrl: $base, fetchedAt: (now * 1000 | floor), models: .models}' \
+    > "$cache_dir/gateway-models.json.tmp" \
+    && chmod 600 "$cache_dir/gateway-models.json.tmp" \
+    && mv "$cache_dir/gateway-models.json.tmp" "$cache_dir/gateway-models.json"
+fi
+
+export API_TIMEOUT_MS="3000000"
+export CLAUDE_CODE_ALWAYS_ENABLE_EFFORT="1"
+
+# Vendor quirks, applied only when the MAIN model is that vendor.
+case "$model" in
+  claude-*)
+    # Custom BASE_URL makes Claude Code assume the proxy may not forward
+    # tool_reference blocks and auto-disables ToolSearch; claude-router is a
+    # pure passthrough, so re-enable (the CLI's own log message documents this
+    # escape hatch). Caveat: /model-switching to a non-claude model mid-session
+    # keeps tool search on, which those backends may not support.
+    export ENABLE_TOOL_SEARCH="true"
+    ;;
+  kimi-*)
+    export ENABLE_TOOL_SEARCH="false"
+    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="262144"
+    ;;
+  glm-*)
+    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="1000000"
+    ;;
+  gpt-*)
+    export ENABLE_TOOL_SEARCH="false"
+    export CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY="3"
+    # 258400 = model_context_window Codex records per turn for gpt-5.5/5.6-sol/
+    # 5.6-terra (uniform across the family). Without this Claude Code assumes
+    # its default window and auto-compacts ~58k tokens early.
+    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="258400"
+    ;;
+esac
+
+if [[ -n "$fast_model" ]]; then
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL="$fast_model"
+  export ANTHROPIC_SMALL_FAST_MODEL="$fast_model"
+fi
+if [[ -n "$subagent_model" ]]; then
+  export CLAUDE_CODE_SUBAGENT_MODEL="$subagent_model"
+fi
+[[ -n "$opus_map" ]] && export ANTHROPIC_DEFAULT_OPUS_MODEL="$opus_map"
+[[ -n "$sonnet_map" ]] && export ANTHROPIC_DEFAULT_SONNET_MODEL="$sonnet_map"
+[[ -n "$fable_map" ]] && export ANTHROPIC_DEFAULT_FABLE_MODEL="$fable_map"
+
+# Teammates (agent teams, tmux mode) are spawned with an env allowlist that
+# drops ANTHROPIC_DEFAULT_*/SUBAGENT model overrides, so remaps would not
+# reach them. CLAUDE_CODE_TEAMMATE_COMMAND lets us interpose a wrapper that
+# re-exports the mappings before exec'ing claude (verified: teammate model
+# alias resolves against these). Note: aliases pinned in the user's
+# settings.json env (currently opus -> claude-opus-5[1m]) win over process
+# env — use the sonnet/fable/haiku aliases for cross-vendor teammates.
+if [[ -n "$fast_model$subagent_model$opus_map$sonnet_map$fable_map" \
+      && -z "${CLAUDE_CODE_TEAMMATE_COMMAND:-}" ]]; then
+  wrap_dir="${XDG_RUNTIME_DIR:-/tmp}/claude-integ"
+  mkdir -p "$wrap_dir"
+  wrap="$wrap_dir/teammate-$$.sh"
+  {
+    echo '#!/usr/bin/env bash'
+    if [[ -n "$fast_model" ]]; then
+      printf 'export ANTHROPIC_DEFAULT_HAIKU_MODEL=%q ANTHROPIC_SMALL_FAST_MODEL=%q\n' \
+        "$fast_model" "$fast_model"
+    fi
+    if [[ -n "$subagent_model" ]]; then
+      printf 'export CLAUDE_CODE_SUBAGENT_MODEL=%q\n' "$subagent_model"
+    fi
+    if [[ -n "$opus_map" ]]; then
+      printf 'export ANTHROPIC_DEFAULT_OPUS_MODEL=%q\n' "$opus_map"
+    fi
+    if [[ -n "$sonnet_map" ]]; then
+      printf 'export ANTHROPIC_DEFAULT_SONNET_MODEL=%q\n' "$sonnet_map"
+    fi
+    if [[ -n "$fable_map" ]]; then
+      printf 'export ANTHROPIC_DEFAULT_FABLE_MODEL=%q\n' "$fable_map"
+    fi
+    printf 'exec %q "$@"\n' "$CLAUDE_BIN"
+  } > "$wrap"
+  chmod +x "$wrap"
+  export CLAUDE_CODE_TEAMMATE_COMMAND="$wrap"
+fi
+
+declare -a flags=(--model "$model" --effort "$effort")
+(( safe )) || flags+=(--dangerously-skip-permissions)
+
+exec "$CLAUDE_BIN" "${flags[@]}" "${passthrough[@]}"
