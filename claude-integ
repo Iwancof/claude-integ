@@ -169,20 +169,34 @@ case "$model" in
     # keeps tool search on, which those backends may not support.
     export ENABLE_TOOL_SEARCH="true"
     ;;
-  kimi-*)
+  kimi-* | k3*)
+    # K3's model ids ("k3", "k3-256k") carry no kimi- prefix — without k3* here
+    # those sessions silently got none of these quirks.
     export ENABLE_TOOL_SEARCH="false"
-    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="262144"
+    # 262144 window - 32000 output reserve - margin (see the gpt-* note below).
+    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="220000"
     ;;
   glm-*)
-    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="1000000"
+    # NOT measured (probe timed out): derived from the published 200k context
+    # minus the 32000 output reserve and margin. GLM does not 400 on overflow —
+    # it returns an empty message with stop_reason=model_context_window_exceeded,
+    # so a too-large value here fails silently. Lower this if you see that.
+    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="160000"
     ;;
   gpt-*)
     export ENABLE_TOOL_SEARCH="false"
     export CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY="3"
-    # 258400 = model_context_window Codex records per turn for gpt-5.5/5.6-sol/
-    # 5.6-terra (uniform across the family). Without this Claude Code assumes
-    # its default window and auto-compacts ~58k tokens early.
-    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="258400"
+    # AUTO_COMPACT_WINDOW must be the budget for INPUT alone, not the model's
+    # total window: Claude Code sends max_tokens=32000 (measured), and the API
+    # rejects the request when input + max_tokens exceeds the real window.
+    #   real window        272000  (Codex: context_window 272000, of which it
+    #                               shows 95% = 258400 as model_context_window)
+    #   - output reserve    32000  (max_tokens Claude Code sends)
+    #   - one turn's growth ~31000 (a big tool result can land before the
+    #                               post-response auto-compact gets to run)
+    #   => 220000 input budget. Setting 258400 here caused recurring
+    #      "input exceeds the context window" 400s (37 in 72h).
+    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="220000"
     ;;
 esac
 

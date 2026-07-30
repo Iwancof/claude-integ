@@ -143,11 +143,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
     def _proxy(self):
         body = self._read_body()
         model = None
+        max_tokens = None
         if body[:1] == b"{":
             try:
                 parsed = json.loads(body)
                 if isinstance(parsed, dict):
                     model = parsed.get("model")
+                    max_tokens = parsed.get("max_tokens")
             except Exception:
                 pass
         backend = ROUTER.pick(model)
@@ -171,13 +173,18 @@ class ProxyHandler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+        # Body size and max_tokens are the two numbers needed to diagnose
+        # "input exceeds the context window" 400s (kB is a rough proxy for
+        # prompt size; no body content is ever logged).
         self.log_message(
-            "%s %s model=%s -> %s [%s]",
+            "%s %s model=%s -> %s [%s] req=%dkB max_tokens=%s",
             self.command,
             self.path.split("?")[0],
             model or "-",
             backend.name,
             status,
+            len(body) // 1024,
+            max_tokens if max_tokens is not None else "-",
         )
 
     def _upstream_headers(self, backend: Backend) -> dict[str, str]:
