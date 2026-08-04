@@ -53,6 +53,7 @@ resolve_model() {
     sonnet) echo "claude-sonnet-5" ;;
     haiku) echo "claude-haiku-4-5" ;;
     kimi) echo "kimi-for-coding" ;;
+    k3) echo "k3[1m]" ;;
     glm) echo "glm-5.2" ;;
     air) echo "glm-4.5-air" ;;
     sol | 5.6-sol) echo "gpt-5.6-sol" ;;
@@ -161,15 +162,21 @@ export CLAUDE_CODE_ALWAYS_ENABLE_EFFORT="1"
 
 # Vendor quirks, applied only when the MAIN model is that vendor.
 #
-# Window vars (CLI 2.1.221 internals, function NEu/SJ):
-#   - Unknown (non-claude-*) models default to a 200k window. /context and
-#     auto-compact both derive from it.
-#   - CLAUDE_CODE_MAX_CONTEXT_TOKENS declares the model's real window, but is
-#     honored ONLY for models not starting with "claude-" — i.e. exactly our
-#     vendor models.
-#   - Effective compact window = min(real window, CLAUDE_CODE_AUTO_COMPACT_WINDOW),
-#     which must stay within [100000, 1000000]. So AUTO_COMPACT_WINDOW alone
-#     can never EXCEED the assumed 200k; both vars are required.
+# Window semantics (CLI 2.1.221, functions NEu/SJ):
+#   effective compact window = min(model window, CLAUDE_CODE_AUTO_COMPACT_WINDOW)
+#   Model window: 1e6 when the id carries a [1m] suffix (KS: /\[1m\]/i, any
+#   vendor — the CLI strips the suffix from the request body and tags the
+#   context-1m beta, which the router strips for vendor backends), else
+#   200000 for unknown models. AUTO_COMPACT_WINDOW range: [100000, 1000000].
+#   => A model can only exceed 200k via [1m]; env can only CAP, never raise.
+#   CLAUDE_CODE_MAX_CONTEXT_TOKENS is deliberately NOT used: it inflates the
+#   assumed window of EVERY non-claude-* model process-wide, so /model-
+#   switching from a 1M launch to gpt (272k real) or glm (200k real) would
+#   overstate their windows and reintroduce overflow 400s / silent truncation.
+#   The 200k default for non-suffixed vendor models is the safe floor.
+# Never inherit these from a parent claude session (nested launches): each
+# quirk arm below sets exactly what its model needs.
+unset CLAUDE_CODE_MAX_CONTEXT_TOKENS CLAUDE_CODE_AUTO_COMPACT_WINDOW
 case "$model" in
   claude-*)
     # Custom BASE_URL makes Claude Code assume the proxy may not forward
@@ -182,8 +189,9 @@ case "$model" in
   kimi-*)
     # K2.7 coding: 262144 window - 32000 output reserve - margin
     # (see the gpt-* note below for why this is input-only budget).
+    # On 2.1.221 min() clamps this to the 200k default window; the value
+    # documents intent and applies on older CLIs without the clamp.
     export ENABLE_TOOL_SEARCH="false"
-    export CLAUDE_CODE_MAX_CONTEXT_TOKENS="262144"
     export CLAUDE_CODE_AUTO_COMPACT_WINDOW="220000"
     ;;
   k3-256k)
@@ -191,25 +199,23 @@ case "$model" in
     # k3-256k is NOT faster than k3 (median TTFT equal, worse tail
     # latency) — there is no speed reason to pick it over k3.
     export ENABLE_TOOL_SEARCH="false"
-    export CLAUDE_CODE_MAX_CONTEXT_TOKENS="262144"
     export CLAUDE_CODE_AUTO_COMPACT_WINDOW="220000"
     ;;
   k3*)
-    # k3 is the 1M-context variant. Full 1M makes auto-compact almost never
-    # fire (huge per-turn cost and latency), so cap the input budget at
-    # 512k (user call 2026-08-05; far below the real window, so the 32000
-    # output reserve is already covered). k3-256k must be matched above:
-    # bare k3* would swallow it.
+    # k3 runs as "k3[1m]" (resolve_model above) so the CLI grants the 1M
+    # window via the [1m] suffix from ANY launch path, including /model.
+    # Full 1M makes auto-compact almost never fire (huge per-turn cost and
+    # latency), so cap the input budget at 512k (user call 2026-08-05; far
+    # below the real window, so the 32000 output reserve is covered).
+    # k3-256k must be matched above: bare k3* would swallow it.
     export ENABLE_TOOL_SEARCH="false"
-    export CLAUDE_CODE_MAX_CONTEXT_TOKENS="1048576"
     export CLAUDE_CODE_AUTO_COMPACT_WINDOW="512000"
     ;;
   glm-*)
-    # Window NOT measured (probe timed out): the published 200k context minus
-    # the 32000 output reserve and margin. GLM does not 400 on overflow —
+    # NOT measured (probe timed out): derived from the published 200k context
+    # minus the 32000 output reserve and margin. GLM does not 400 on overflow —
     # it returns an empty message with stop_reason=model_context_window_exceeded,
     # so a too-large value here fails silently. Lower this if you see that.
-    export CLAUDE_CODE_MAX_CONTEXT_TOKENS="200000"
     export CLAUDE_CODE_AUTO_COMPACT_WINDOW="160000"
     ;;
   gpt-*)
@@ -225,7 +231,7 @@ case "$model" in
     #                               post-response auto-compact gets to run)
     #   => 220000 input budget. Setting 258400 here caused recurring
     #      "input exceeds the context window" 400s (37 in 72h).
-    export CLAUDE_CODE_MAX_CONTEXT_TOKENS="272000"
+    #   On 2.1.221 min() clamps to the 200k default window (safe floor).
     export CLAUDE_CODE_AUTO_COMPACT_WINDOW="220000"
     ;;
 esac

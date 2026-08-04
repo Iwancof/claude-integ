@@ -24,10 +24,15 @@ url = "https://api.kimi.com/coding"
 auth_token = "sk-kimi-REPLACE_ME"
 # The coding-plan endpoint serves kimi-for-coding(-highspeed) = K2.7 and
 # k3 / k3-256k (ids without the kimi- prefix, hence the extra "k3" prefix).
+# k3 is offered as "k3[1m]": the CLI's [1m] suffix grants the 1M window on
+# any launch path and is stripped from the request body before forwarding,
+# so routing needs only the "k3" prefix. context-1m is the beta the CLI
+# tags for [1m] models; vendors must not see it.
 model_prefixes = ["kimi-", "k3"]
-strip_beta = ["oauth-2025-04-20"]
+strip_beta = ["oauth-2025-04-20", "context-1m-2025-08-07"]
 picker_models = [
-  { id = "k3", display_name = "Kimi K3 (Moonshot)" },
+  { id = "k3[1m]", display_name = "Kimi K3 (Moonshot, 1M)" },
+  { id = "k3-256k", display_name = "Kimi K3 256k (Moonshot)" },
   { id = "kimi-for-coding", display_name = "Kimi K2.7 Coding (Moonshot)" },
 ]
 
@@ -35,11 +40,11 @@ picker_models = [
 url = "https://api.z.ai/api/anthropic"
 auth_token = "REPLACE_ME"
 model_prefixes = ["glm-"]
-strip_beta = ["oauth-2025-04-20"]
+strip_beta = ["oauth-2025-04-20", "context-1m-2025-08-07"]
 
 # Resident CLIProxyAPI (Anthropic-format endpoint, translates to Codex/OpenAI).
 [backends.cliproxy]
 url = "http://127.0.0.1:8317"
 auth_token = "sk-dummy"
 model_prefixes = ["gpt-"]
-strip_beta = ["oauth-2025-04-20"]
+strip_beta = ["oauth-2025-04-20", "context-1m-2025-08-07"]

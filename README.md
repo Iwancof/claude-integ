@@ -117,9 +117,15 @@ remap 不可**(settings env が process env に勝つ)— その場合は別の 
   tool_reference)を持つセッションを `/model` で他ベンダーに切替えると 400 になりうる
   (Kimi 実測: "tokenization failed")。軽い履歴なら成功する。ベンダー混在は
   「メイン+subagent/teammate のロール分担」で行うのが安全。
-- **コンテキスト窓**: 非 Claude モデルには `CLAUDE_CODE_AUTO_COMPACT_WINDOW` で
-  実窓サイズを教える(claude-integ が kimi/glm/gpt に設定済み)。未設定だと
-  CLI の既定窓を仮定して早すぎる auto-compact が起こる。
+- **コンテキスト窓 / auto-compact**: CLI の有効窓は
+  `min(モデル窓, CLAUDE_CODE_AUTO_COMPACT_WINDOW)`。モデル窓は id に `[1m]`
+  サフィックスがあれば 1M(任意ベンダーで有効、CLI が送信時に suffix を
+  剥がすため router 変更不要)、それ以外の未知モデルは 200k 固定。
+  claude-integ は `k3` を `k3[1m]` として起動し 512k にキャップする
+  (picker から選んだ場合は cap なし = 1M フル。cap は起動時 env でしか
+  設定できない構造制限)。**`CLAUDE_CODE_MAX_CONTEXT_TOKENS` は使わない** —
+  全非 claude モデルの窓をプロセス全体で膨らませ、/model 切替先の
+  実窓(gpt 272k / glm 200k)を超過して 400 や無言打ち切りを招く。
 
 ## 注意(免責)
 
