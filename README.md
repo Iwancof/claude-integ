@@ -22,10 +22,25 @@ router は **JSON body の `model` プレフィックス**で振り分ける:
 | `glm-*` | `api.z.ai/api/anthropic` | 同上 |
 | `gpt-*` | CLIProxyAPI `127.0.0.1:8317`(Codex OAuth) | 同上 |
 
-全バックエンドが Anthropic Messages API 互換なので**ペイロード変換なし**の純粋転送。
-非 `/v1/messages` エンドポイント(usage 等)も Anthropic へ素通しされるため、
-純正パスはプロキシ無しと bit-identical。プレフィックス・バックエンドは
-config.toml で自由に増減できる(使わないベンダーは消せばよい)。
+全バックエンドが Anthropic Messages API 互換なので、原則**ペイロード変換なし**の
+純粋転送(唯一の例外は次節の WebSearch)。非 `/v1/messages` エンドポイント(usage 等)も
+Anthropic へ素通しされるため、純正パスはプロキシ無しと bit-identical。
+プレフィックス・バックエンドは config.toml で自由に増減できる
+(使わないベンダーは消せばよい)。
+
+### WebSearch は model に関わらず Anthropic へ
+
+WebSearch / WebFetch は Claude Code が**別の `/v1/messages` リクエスト**として投げ、
+そこに Anthropic の server tool `web_search_*` を載せる。この tool はベンダー側に
+存在しないので、素直に転送すると**ベンダーモデルが自分の知識で書いた文章が
+そのまま「検索結果」として CLI に取り込まれる**(UI は "Did 0 searches in 40s"、
+記録上も `searchCount: 0`。それでも結果らしきテキストは表示される)。
+
+router は `tools` 配列に server tool を見つけたリクエストだけ Anthropic へ回し、
+`model` を `server_tool_model`(既定 `claude-sonnet-5`)に差し替える。
+これでベンダーセッションでも WebSearch が実際に検索する。判定は `tools` 配列のみを
+見るため、会話本文に `web_search_20260209` の文字列が出てもセッション本体の
+振り分けは変わらない。
 
 ## 前提条件
 
@@ -110,7 +125,7 @@ remap 不可**(settings env が process env に勝つ)— その場合は別の 
 
 - 本ツールは Claude Code CLI の**非公開の内部挙動**(gateway-models cache、
   `ANTHROPIC_DEFAULT_*_MODEL`、`CLAUDE_CODE_TEAMMATE_COMMAND` 等の env)に
-  依存する。CLI 更新で予告なく壊れうる。動作検証は Claude Code 2.1.220。
+  依存する。CLI 更新で予告なく壊れうる。動作検証は Claude Code 2.1.221。
 - 各ベンダーの利用規約・サブスクリプション条件の順守は利用者の責任で。
 - router は 127.0.0.1 でのみ待ち受け、認証情報をログに出さない設計だが、
   config.toml には生の API key が入る(install.sh が chmod 600 にする)。

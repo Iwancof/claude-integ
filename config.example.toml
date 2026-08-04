@@ -5,6 +5,12 @@ listen_host = "127.0.0.1"
 listen_port = 8399
 default_backend = "anthropic"
 
+# WebSearch/WebFetch reach the API as a separate call carrying Anthropic's
+# web_search_* server tool. Vendor backends cannot run it (they answer from
+# their own weights, and Claude Code shows that as a search result with
+# searchCount=0), so those calls go to the default backend under this model.
+server_tool_model = "claude-sonnet-5"
+
 # No auth_token => passthrough: the client's own auth headers (e.g. Claude
 # Code's subscription OAuth bearer) are forwarded untouched.
 [backends.anthropic]

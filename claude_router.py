@@ -32,6 +32,9 @@ from urllib.parse import urlsplit
 
 UPSTREAM_TIMEOUT = 3600  # generation can be very long; Claude Code sets its own timeout
 
+# Model that runs rerouted server-tool calls (override: server_tool_model in config).
+SERVER_TOOL_MODEL = "claude-sonnet-5"
+
 # Hop-by-hop headers never forwarded in either direction (RFC 9110 §7.6.1).
 HOP_BY_HOP = {
     "connection",
@@ -62,7 +65,7 @@ class Backend:
     picker_models: list[dict] = field(default_factory=list)
 
 
-def load_config(path: str) -> tuple[str, int, list[Backend], Backend]:
+def load_config(path: str) -> tuple[str, int, list[Backend], Backend, str]:
     with open(path, "rb") as f:
         raw = tomllib.load(f)
 
@@ -94,6 +97,7 @@ def load_config(path: str) -> tuple[str, int, list[Backend], Backend]:
         int(raw.get("listen_port", 8399)),
         list(backends.values()),
         backends[default_name],
+        raw.get("server_tool_model", SERVER_TOOL_MODEL),
     )
 
 
@@ -113,6 +117,21 @@ class Router:
                 if model.startswith(prefix):
                     return backend
         return self.default
+
+
+def _wants_server_tool(parsed: dict | None) -> bool:
+    """True if the request declares an Anthropic server tool (web_search_*).
+
+    Only the tools array is inspected: the same marker shows up in ordinary
+    conversation text, which must keep its own model-based routing.
+    """
+    tools = (parsed or {}).get("tools")
+    if not isinstance(tools, list):
+        return False
+    return any(
+        isinstance(t, dict) and str(t.get("type", "")).startswith("web_search_")
+        for t in tools
+    )
 
 
 ROUTER: Router | None = None
@@ -142,17 +161,29 @@ class ProxyHandler(BaseHTTPRequestHandler):
     # ---- proxying -----------------------------------------------------
     def _proxy(self):
         body = self._read_body()
+        parsed = None
         model = None
         max_tokens = None
         if body[:1] == b"{":
             try:
-                parsed = json.loads(body)
-                if isinstance(parsed, dict):
-                    model = parsed.get("model")
-                    max_tokens = parsed.get("max_tokens")
+                obj = json.loads(body)
+                if isinstance(obj, dict):
+                    parsed = obj
+                    model = obj.get("model")
+                    max_tokens = obj.get("max_tokens")
             except Exception:
                 pass
         backend = ROUTER.pick(model)
+
+        # Claude Code runs WebSearch as a separate /v1/messages call carrying
+        # Anthropic's web_search_* server tool, tagged with the session's model.
+        # A vendor backend has no such tool, answers from its own weights, and
+        # the CLI reports searchCount=0 while showing that invented text as
+        # search results. Hand those calls to Anthropic instead.
+        if backend.auth_token is not None and _wants_server_tool(parsed):
+            parsed["model"] = SERVER_TOOL_MODEL
+            body = json.dumps(parsed).encode()
+            model, backend = SERVER_TOOL_MODEL, ROUTER.default
 
         headers = self._upstream_headers(backend)
         path = backend.base_path + self.path
@@ -320,8 +351,8 @@ def main():
     ap.add_argument("--config", required=True)
     args = ap.parse_args()
 
-    global ROUTER
-    host, port, backends, default = load_config(args.config)
+    global ROUTER, SERVER_TOOL_MODEL
+    host, port, backends, default, SERVER_TOOL_MODEL = load_config(args.config)
     ROUTER = Router(backends, default)
 
     server = ThreadingHTTPServer((host, port), ProxyHandler)
