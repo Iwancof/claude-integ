@@ -231,7 +231,13 @@ case "$model" in
     #                               post-response auto-compact gets to run)
     #   => 220000 input budget. Setting 258400 here caused recurring
     #      "input exceeds the context window" 400s (37 in 72h).
-    #   On 2.1.221 min() clamps to the 200k default window (safe floor).
+    # MAX_CONTEXT_TOKENS declares the real 272k window; without it the CLI
+    # assumes 200k for unknown models and min() clamps the budget to 200k.
+    # Process-global side effect is bounded to THIS gpt launch: picker-
+    # switching to kimi (real 262k, cap 220k) and k3[1m] ([1m] wins over
+    # MAX) stays safe; only glm (real 200k) would overshoot, and GLM fails
+    # soft (empty response), not 400.
+    export CLAUDE_CODE_MAX_CONTEXT_TOKENS="272000"
     export CLAUDE_CODE_AUTO_COMPACT_WINDOW="220000"
     ;;
 esac
