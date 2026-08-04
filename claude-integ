@@ -169,12 +169,27 @@ case "$model" in
     # keeps tool search on, which those backends may not support.
     export ENABLE_TOOL_SEARCH="true"
     ;;
-  kimi-* | k3*)
-    # K3's model ids ("k3", "k3-256k") carry no kimi- prefix — without k3* here
-    # those sessions silently got none of these quirks.
+  kimi-*)
+    # K2.7 coding: 262144 window - 32000 output reserve - margin
+    # (see the gpt-* note below for why this is input-only budget).
     export ENABLE_TOOL_SEARCH="false"
-    # 262144 window - 32000 output reserve - margin (see the gpt-* note below).
     export CLAUDE_CODE_AUTO_COMPACT_WINDOW="220000"
+    ;;
+  k3-256k)
+    # 256k variant of K3: same budget as K2.7. Note: measured 2026-08-05,
+    # k3-256k is NOT faster than k3 (median TTFT equal, worse tail
+    # latency) — there is no speed reason to pick it over k3.
+    export ENABLE_TOOL_SEARCH="false"
+    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="220000"
+    ;;
+  k3*)
+    # k3 is the 1M-context variant. Full 1M makes auto-compact almost never
+    # fire (huge per-turn cost and latency), so cap the input budget at
+    # 512k (user call 2026-08-05; far below the real window, so the 32000
+    # output reserve is already covered). k3-256k must be matched above:
+    # bare k3* would swallow it.
+    export ENABLE_TOOL_SEARCH="false"
+    export CLAUDE_CODE_AUTO_COMPACT_WINDOW="512000"
     ;;
   glm-*)
     # NOT measured (probe timed out): derived from the published 200k context
