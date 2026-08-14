@@ -177,6 +177,7 @@ export CLAUDE_CODE_ALWAYS_ENABLE_EFFORT="1"
 # Never inherit these from a parent claude session (nested launches): each
 # quirk arm below sets exactly what its model needs.
 unset CLAUDE_CODE_MAX_CONTEXT_TOKENS CLAUDE_CODE_AUTO_COMPACT_WINDOW
+declare -a extra_flags=()
 case "$model" in
   claude-*)
     # Custom BASE_URL makes Claude Code assume the proxy may not forward
@@ -220,6 +221,12 @@ case "$model" in
     ;;
   gpt-*)
     export ENABLE_TOOL_SEARCH="false"
+    # GPT models are strongly plan-first trained and call the EnterPlanMode
+    # tool on their own, silently flipping the permission mode to plan. Drop
+    # the tool at launch, and back it up with a system-prompt instruction for
+    # paths where the tool survives (e.g. /model switching) (2026-08-14).
+    extra_flags+=(--disallowedTools "EnterPlanMode"
+      --append-system-prompt "Never call the EnterPlanMode tool on your own initiative. Enter plan mode only when the user explicitly asks for a plan or plan mode; otherwise proceed directly with the task.")
     export CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY="3"
     # AUTO_COMPACT_WINDOW must be the budget for INPUT alone, not the model's
     # total window: Claude Code sends max_tokens=32000 (measured), and the API
@@ -289,7 +296,7 @@ if [[ -n "$fast_model$subagent_model$opus_map$sonnet_map$fable_map" \
   export CLAUDE_CODE_TEAMMATE_COMMAND="$wrap"
 fi
 
-declare -a flags=(--model "$model" --effort "$effort")
+declare -a flags=(--model "$model" --effort "$effort" ${extra_flags[@]+"${extra_flags[@]}"})
 (( safe )) || flags+=(--dangerously-skip-permissions)
 
 exec "$CLAUDE_BIN" "${flags[@]}" "${passthrough[@]}"
